@@ -63,4 +63,4 @@ Run both after every Pi upgrade before relying on the new version. `BLUEPRINT.md
 
 ## Licence
 
-MIT. See `LICENSE`.
+PolyForm Noncommercial 1.0.0. Free to use, modify and share for noncommercial purposes. Commercial use needs a separate license from the copyright holder. See `LICENSE`. Contributions are welcome: see `CONTRIBUTING.md`.

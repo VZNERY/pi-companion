@@ -3,7 +3,7 @@
   "version": "0.4.1",
   "description": "Pi package that turns a Pi session into a personal companion: profile and skill routing in the prompt, background workers with a job list on disk, and a remember tool.",
   "type": "module",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "keywords": ["pi-package", "pi-coding-agent", "companion"],
   "engines": { "node": ">=22.19.0" },
   "pi": {
@@ -13,5 +13,5 @@
     "test": "node --test test/",
     "e2e": "node scripts/e2e.mjs"
   },
-  "files": ["extensions", "profile", "scripts", "README.md", "BLUEPRINT.md", "CHANGELOG.md", "LICENSE"]
+  "files": ["extensions", "profile", "scripts", "README.md", "BLUEPRINT.md", "CHANGELOG.md", "LICENSE", "CONTRIBUTING.md"]
 }
