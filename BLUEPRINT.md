@@ -64,7 +64,7 @@ the user reported the companion skipped the probability line. Reproduced in a li
 
 ## Decisions
 
-- **Extension, not a fork.** the assistant Core was a fork and every upstream change had to be merged by hand. Here Pi stays stock; an upgrade is a version bump followed by `npm test` and `npm run e2e`.
+- **Extension, not a fork.** An earlier version was a fork and every upstream change had to be merged by hand. Here Pi stays stock; an upgrade is a version bump followed by `npm test` and `npm run e2e`.
 - **No runtime dependencies.** SQLite comes from Node, the tool schema library from Pi.
 - **Only the report enters the conversation.** A worker's tool output never does. This is what lets one session carry many jobs.
 - **Workers cannot delegate.** They run with `PI_COMPANION=off`, so a worker never loads the companion and starts a loop.

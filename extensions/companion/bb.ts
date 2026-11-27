@@ -51,7 +51,7 @@ export function spawnArgs(ctx: BbContext, worker: string, task: string, model?: 
     "--provider",
     bbProviderFor(worker),
     "--title",
-    `the assistant: ${titleOf(task)}`,
+    `Companion: ${titleOf(task)}`,
     "--json",
     "--prompt",
     task + REPORT_RULE,

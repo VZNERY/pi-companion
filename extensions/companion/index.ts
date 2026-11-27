@@ -381,12 +381,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     if (!enabled) return;
     const jobs = openStore();
     if (!jobs) {
-      if (ctx.hasUI) ctx.ui.notify(`the assistant companion: job list unavailable (${storeError}); profile only`, "warning");
+      if (ctx.hasUI) ctx.ui.notify(`Companion: job list unavailable (${storeError}); profile only`, "warning");
       return;
     }
     startPolling();
     syncBadge(); // clears a stale count left by a session that ended
-    if (ctx.hasUI) ctx.ui.notify(`the assistant companion on (${jobs.active().length} jobs running)`, "info");
+    if (ctx.hasUI) ctx.ui.notify(`Companion on (${jobs.active().length} jobs running)`, "info");
   });
 
   // Jobs are not stopped here: they run in their own processes and are reported when this conversation reopens.
@@ -395,7 +395,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   });
 
   pi.registerCommand("companion", {
-    description: "the assistant companion: on, off or status",
+    description: "Companion: on, off or status",
     handler: async (args: string, ctx: { ui: { notify: (message: string, level: "info" | "warning" | "error") => void } }) => {
       const action = args.trim().toLowerCase();
       if (action === "on" || action === "off") {
@@ -403,7 +403,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         applySwitch(action === "on");
         if (action === "on") startPolling();
         else stopPolling();
-        ctx.ui.notify(`the assistant companion ${action}`, "info");
+        ctx.ui.notify(`Companion ${action}`, "info");
         return;
       }
       const prompt = buildPrompt({
@@ -413,7 +413,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       });
       const jobs = openStore();
       ctx.ui.notify(
-        `the assistant companion ${isEnabled(STATE_PATH) ? "on" : "off"} · prompt ${prompt.text.length} chars${prompt.overBudget ? " (OVER BUDGET)" : ""} · ` +
+        `Companion ${isEnabled(STATE_PATH) ? "on" : "off"} · prompt ${prompt.text.length} chars${prompt.overBudget ? " (OVER BUDGET)" : ""} · ` +
           (jobs ? `${jobs.active().length} jobs running` : `job list unavailable (${storeError})`),
         prompt.overBudget ? "warning" : "info",
       );

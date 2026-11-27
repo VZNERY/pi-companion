@@ -37,7 +37,7 @@ test("spawnArgs leaves out --model when none is given, and shortens a long task 
   assert.ok(!args.includes("--model"));
   const title = args[args.indexOf("--title") + 1]!;
   assert.ok(title.length < 80, `title was ${title.length} chars`);
-  assert.ok(title.startsWith("the assistant: "));
+  assert.ok(title.startsWith("Companion: "));
 });
 
 test("parseSpawnOutput reads the thread id, and reports a clear error instead of throwing", () => {

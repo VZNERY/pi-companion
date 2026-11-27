@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- Child threads and on-screen notices are named "Companion", not a leftover placeholder. No other changes.
+
 ## 0.6.0
 
 Speed, briefs, quality tiers, and a visible count of working agents. Every number below was measured here with `npm run bench`.
@@ -30,7 +34,7 @@ the user asked to see delegated work as real bb child threads, not hidden proces
 - **Delegate spawns a real bb child thread when run inside bb.** `bb.ts` builds the `bb thread spawn` call (parented and lifecycle-owned by the companion thread, so it never outlives it); `bb-runner.ts` is the detached process that spawns it, waits for it with `bb thread wait --status idle`, and reads its result with `bb thread output`. Outside bb, delegate is unchanged: a local background process via `workers.ts`/`runner.ts`.
 - Jobs and reports now carry the child thread's id and show it as a clickable `@thread:<id>` link.
 - Cancelling a bb-thread job calls `bb thread stop` on the real thread, in addition to stopping the wrapper process.
-- Verified live end to end in a real bb thread: a delegated job appeared as a visible child thread titled "the assistant: ...", did real work, finished, and its report in the parent thread correctly linked the child. A second test confirmed cancel stops the child thread (`bb thread stop` moves it back to idle) and the file it would have written was never created.
+- Verified live end to end in a real bb thread: a delegated job appeared as a visible child thread titled "Companion: ...", did real work, finished, and its report in the parent thread correctly linked the child. A second test confirmed cancel stops the child thread (`bb thread stop` moves it back to idle) and the file it would have written was never created.
 
 41 unit tests (32 prior + 9 new) and the live e2e test pass.
 
