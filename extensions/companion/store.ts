@@ -24,14 +24,27 @@ export interface Job {
   announced: boolean;
   /** Set when this job ran as a bb child thread instead of a local process, so it can be shown and stopped as one. */
   childThreadId: string | null;
+  /** How the worker was started: MCP servers, web access, and the key that lets a follow-up resume its session. */
+  options: JobOptions;
 }
 
-export interface NewJob { task: string; worker: string; model?: string | null; cwd: string; origin?: string; childThreadId?: string | null }
+export interface JobOptions { mcp?: string[]; web?: boolean; full?: boolean; sessionKey?: string }
+
+export interface NewJob { task: string; worker: string; model?: string | null; cwd: string; origin?: string; childThreadId?: string | null; options?: JobOptions }
 
 const FINISHED: JobStatus[] = ["done", "failed", "cancelled", "interrupted"];
 export const isFinished = (status: JobStatus): boolean => FINISHED.includes(status);
 
 type Row = Record<string, string | number | null>;
+
+function parseOptions(raw: string | number | null | undefined): JobOptions {
+  try {
+    const value = JSON.parse(String(raw ?? "{}")) as unknown;
+    return value && typeof value === "object" ? (value as JobOptions) : {};
+  } catch {
+    return {};
+  }
+}
 
 function toJob(row: Row): Job {
   return {
@@ -50,6 +63,7 @@ function toJob(row: Row): Job {
     finishedAt: row.finished_at === null ? null : Number(row.finished_at),
     announced: Number(row.announced) === 1,
     childThreadId: row.child_thread_id === null ? null : String(row.child_thread_id),
+    options: parseOptions(row.options),
   };
 }
 
@@ -78,13 +92,15 @@ export class JobStore {
       finished_at INTEGER,
       announced INTEGER NOT NULL DEFAULT 0,
       origin TEXT NOT NULL DEFAULT '',
-      child_thread_id TEXT
+      child_thread_id TEXT,
+      options TEXT NOT NULL DEFAULT '{}'
     )`);
     // Older job lists are missing newer columns; add whichever this one still lacks.
     const columns = this.db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
     const has = (name: string) => columns.some((column) => column.name === name);
     if (!has("origin")) this.db.exec("ALTER TABLE jobs ADD COLUMN origin TEXT NOT NULL DEFAULT ''");
     if (!has("child_thread_id")) this.db.exec("ALTER TABLE jobs ADD COLUMN child_thread_id TEXT");
+    if (!has("options")) this.db.exec("ALTER TABLE jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}'");
   }
 
   create(input: NewJob): Job {
@@ -92,8 +108,8 @@ export class JobStore {
     if (!task) throw new Error("a job needs a task");
     const id = `j${this.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     this.db
-      .prepare("INSERT INTO jobs (id, task, worker, model, cwd, origin, status, created_at, child_thread_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)")
-      .run(id, task, input.worker, input.model ?? null, input.cwd, input.origin ?? "", this.now(), input.childThreadId ?? null);
+      .prepare("INSERT INTO jobs (id, task, worker, model, cwd, origin, status, created_at, child_thread_id, options) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)")
+      .run(id, task, input.worker, input.model ?? null, input.cwd, input.origin ?? "", this.now(), input.childThreadId ?? null, JSON.stringify(input.options ?? {}));
     return this.get(id)!;
   }
 
@@ -108,6 +124,11 @@ export class JobStore {
 
   list(limit = 20): Job[] {
     return (this.db.prepare("SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT ?").all(limit) as Row[]).map(toJob);
+  }
+
+  /** How many jobs of one conversation are still queued or running: the number shown in the thread title. */
+  activeCount(origin: string): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE origin = ? AND status IN ('queued','running')").get(origin) as { n: number }).n);
   }
 
   active(): Job[] {

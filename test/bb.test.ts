@@ -23,12 +23,12 @@ test("each worker maps to the bb provider that actually runs it", () => {
 });
 
 test("spawnArgs sets the parent and the lifecycle owner to the companion thread, and ends with --prompt", () => {
-  const args = spawnArgs(CTX, "pi", "do the thing", "minimax/MiniMax-M3");
+  const args = spawnArgs(CTX, "pi", "do the thing", "provider/model-a");
   assert.deepEqual(args.slice(0, 2), ["thread", "spawn"]);
   assert.ok(args.includes("--parent-thread") && args[args.indexOf("--parent-thread") + 1] === "thr_1");
   assert.ok(args.includes("--lifecycle-owner-thread") && args[args.indexOf("--lifecycle-owner-thread") + 1] === "thr_1");
   assert.equal(args[args.indexOf("--provider") + 1], "pi");
-  assert.equal(args[args.indexOf("--model") + 1], "minimax/MiniMax-M3");
+  assert.equal(args[args.indexOf("--model") + 1], "provider/model-a");
   assert.match(args[args.indexOf("--prompt") + 1]!, /^do the thing[\s\S]*short report/);
 });
 

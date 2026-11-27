@@ -5,9 +5,9 @@ import { runWorker, tail, workerCommand } from "../extensions/companion/workers.
 const sh = (script: string) => ({ command: "sh", args: ["-c", script], env: {} });
 
 test("each worker gets its own command, and Pi workers have the companion switched off", () => {
-  const pi = workerCommand("pi", "do it", "minimax/MiniMax-M3");
+  const pi = workerCommand("pi", "do it", "provider/model-a");
   assert.equal(pi.command, "pi");
-  assert.deepEqual(pi.args.slice(0, 4), ["-p", "--no-session", "--model", "minimax/MiniMax-M3"]);
+  assert.deepEqual(pi.args.slice(0, 5), ["-p", "--no-session", "-ne", "--model", "provider/model-a"]);
   assert.equal(pi.env.PI_COMPANION, "off");
   assert.match(pi.args.at(-1)!, /^do it[\s\S]*short report/);
   assert.equal(workerCommand("claude", "x").command, "claude");
@@ -63,4 +63,34 @@ test("long output keeps only its end", () => {
   assert.ok(kept.endsWith("FINAL REPORT"));
   assert.ok(kept.startsWith("[earlier output omitted]"));
   assert.equal(tail("short"), "short");
+});
+
+test("a lean Pi worker loads no extensions and no MCP unless asked, and a full worker loads everything", () => {
+  const lean = workerCommand("pi", "x");
+  assert.ok(lean.args.includes("-ne"));
+  assert.ok(!lean.args.includes("builtin:mcp"));
+  assert.equal(lean.env.PI_CODING_AGENT_DIR, undefined);
+  const full = workerCommand("pi", "x", null, { full: true });
+  assert.ok(!full.args.includes("-ne"));
+});
+
+test("a worker that needs MCP servers gets the MCP extension and may use only those servers' tools", () => {
+  const cmd = workerCommand("pi", "x", null, { mcp: ["images", "memory", "memory"] });
+  assert.deepEqual(cmd.args.slice(cmd.args.indexOf("-e"), cmd.args.indexOf("-e") + 2), ["-e", "builtin:mcp"]);
+  const tools = cmd.args[cmd.args.indexOf("--tools") + 1]!;
+  assert.match(tools, /^read,bash,edit,write,grep,find,ls,codemode,mcp__images__\*,mcp__memory__\*$/);
+  assert.ok(!tools.includes("video"));
+  assert.ok(!workerCommand("pi", "x").args.includes("--tools"));
+});
+
+test("a worker with a session key resumes the same session; without one it keeps nothing", () => {
+  const first = workerCommand("pi", "x", null, { sessionKey: "k1", sessionDir: "/tmp/s" });
+  assert.deepEqual(first.args.slice(1, 5), ["--session-dir", "/tmp/s", "--session-id", "k1"]);
+  assert.ok(!first.args.includes("--no-session"));
+  assert.ok(workerCommand("pi", "x").args.includes("--no-session"));
+});
+
+test("web access is loaded only when its path is given", () => {
+  assert.ok(workerCommand("pi", "x", null, { webExtension: "/p/web" }).args.includes("/p/web"));
+  assert.ok(!workerCommand("pi", "x").args.includes("/p/web"));
 });

@@ -1,6 +1,6 @@
 {
   "name": "pi-companion",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Pi package that turns a Pi session into a personal companion: profile and skill routing in the prompt, background workers with a job list on disk, and a remember tool.",
   "type": "module",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -11,7 +11,8 @@
   },
   "scripts": {
     "test": "node --test test/",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "bench": "node scripts/bench.mjs"
   },
   "files": ["extensions", "profile", "scripts", "README.md", "BLUEPRINT.md", "CHANGELOG.md", "LICENSE", "CONTRIBUTING.md"]
 }

@@ -5,9 +5,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { refreshBadge } from "./badge.ts";
 import { bbContext } from "./bb.ts";
+import { buildBrief, recentConversation } from "./brief.ts";
 import { detectGuardrail } from "./guardrails.ts";
+import { chooseMode, newSessionKey, resumable } from "./route.ts";
 import { isFinished, JobStore, processAlive, type Job } from "./store.ts";
+import { loadTiers, pickWorker } from "./tiers.ts";
 import { buildPrompt, isEnabled, learn, readIfExists, setEnabled } from "./prompt.ts";
 import { killGroup, workerCommand, WORKERS } from "./workers.ts";
 
@@ -28,8 +32,10 @@ const DATA_DIR = process.env.PI_COMPANION_DATA_DIR ?? join(process.env.PI_CODING
 const STATE_PATH = join(DATA_DIR, "state.json");
 const LEARNED_PATH = join(DATA_DIR, "learned.md");
 const JOBS_PATH = join(DATA_DIR, "jobs.sqlite");
+const TIERS_PATH = join(DATA_DIR, "workers.json");
 const TOOL_NAMES = ["delegate", "jobs", "remember", "companion"];
-const JOB_TIMEOUT_MS = 45 * 60_000;
+const DEFAULT_JOB_MINUTES = 20;
+const MAX_JOB_MINUTES = 120;
 const MAX_RUNNING = 4;
 const POLL_MS = 4000;
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), "runner.ts");
@@ -81,6 +87,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   let storeError: string | undefined;
   let origin = originOf(process.cwd());
   let poller: ReturnType<typeof setInterval> | undefined;
+  let lastBadge = 0; // the count last written to the thread title
+  let tick = 0;
+  let verifyIn = 0; // ticks until the title is checked once more after a change
+  // Title updates run one at a time, and read the count when they run, so two jobs started together cannot overwrite
+  // each other with an older number.
+  let badgeChain: Promise<unknown> = Promise.resolve();
+  const syncBadge = () => {
+    badgeChain = badgeChain.then(() => refreshBadge(origin, openStore()?.activeCount(origin) ?? 0)).catch(() => undefined);
+  };
 
   const openStore = (): JobStore | undefined => {
     if (store || storeError) return store;
@@ -98,6 +113,16 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     if (!jobs) return;
     try {
       jobs.reconcile(processAlive);
+      // Keep the thread title's agent count right: on every change, and re-checked about once a minute while any run.
+      const working = jobs.activeCount(origin);
+      tick += 1;
+      if (working !== lastBadge || (working > 0 && tick % 15 === 0)) {
+        lastBadge = working;
+        verifyIn = 2;
+        syncBadge();
+      } else if (verifyIn > 0 && --verifyIn === 0) {
+        syncBadge(); // a second look after a change, in case another process wrote an older count meanwhile
+      }
       for (const job of jobs.unannounced(origin)) {
         if (!jobs.claimAnnouncement(job.id)) continue;
         pi.sendMessage(
@@ -118,54 +143,93 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     description:
       "Hand a task to a background worker that runs in its own context, so this conversation stays free. Returns at once " +
       "with a job id; the worker's short report is posted here when it ends, even if this session was closed in between. " +
-      "Workers: pi (default, general and coding), claude (frontend and visual design), codex. Write the task as one " +
-      "complete instruction: the worker sees none of this conversation. Inside bb, the worker runs as a visible bb " +
-      "child thread, so the user can open and watch it directly.",
+      "The worker sees none of this conversation except the brief you write: put the goal in task, what it must know in " +
+      "context, and what finished looks like in expected_output. Workers start lean (about 2 seconds) and load only the " +
+      "MCP servers you list in mcp. tier chooses the quality: fast for routine work, best for work needing careful reasoning.",
     promptSnippet: "Hand long or multi-step work to a background worker and keep talking",
     promptGuidelines: [
       "Use delegate for any work that needs more than a few tool calls or more than about a minute; answer quick questions and do small checks yourself.",
+      "Write a real brief: goal in task, what the worker must know in context (paths, ids, decisions already made, approvals already given), and what finished looks like in expected_output.",
+      "Set mcp to the MCP server names the job needs, for example [\"memory\"]; leave it out when the job needs none, because every server slows the worker's start.",
+      "Use tier \"best\" when the work needs careful multi-step reasoning or the user asks for top quality; the default fast tier is for routine work.",
+      "Do not set include_conversation unless the task truly depends on what was just said and you cannot put it in context.",
+      "Set watch true only when the user wants to open and watch the worker; otherwise jobs start fast, and the thread title shows how many agents are working.",
       "After calling delegate, tell the user in one short sentence that the work has started, then stop. Never wait or poll in a loop.",
       "Never say a delegated job is done until its report has arrived in the conversation.",
     ],
     parameters: Type.Object({
-      task: Type.String({ description: "Complete, self-contained instruction for the worker, including paths and what a finished result looks like" }),
-      worker: Type.Optional(Type.String({ description: `One of: ${WORKERS.join(", ")}. Default pi.` })),
-      model: Type.Optional(Type.String({ description: "Model for the worker, for example minimax/MiniMax-M3. Leave out to use the worker's default." })),
+      task: Type.String({ description: "The goal: what the worker must do, in one clear instruction" }),
+      context: Type.Optional(Type.String({ description: "What the worker must know: file paths, ids, decisions already made, approvals already given" })),
+      expected_output: Type.Optional(Type.String({ description: "What finished looks like, and what the final report must contain" })),
+      tier: Type.Optional(Type.String({ description: "fast (default) or best. Chooses the worker and model from the user's workers.json." })),
+      worker: Type.Optional(Type.String({ description: `Only to override the tier: one of ${WORKERS.join(", ")}.` })),
+      model: Type.Optional(Type.String({ description: "Only to override the tier's model." })),
+      mcp: Type.Optional(Type.Array(Type.String(), { description: "MCP server names this job needs. Only these are loaded. Leave out if none." })),
+      web: Type.Optional(Type.Boolean({ description: "True if the job needs web search or page fetching." })),
+      watch: Type.Optional(Type.Boolean({ description: "True to run it as a visible bb child thread the user can open. Slower to start." })),
+      include_conversation: Type.Optional(Type.Boolean({ description: "True to give the worker the last few messages of this conversation. Rarely needed: put what it must know in context instead." })),
+      max_minutes: Type.Optional(Type.Number({ description: "Time limit for the job in minutes (default 20, at most 120). The worker is stopped when it runs out." })),
       cwd: Type.Optional(Type.String({ description: "Folder the worker runs in. Default: this session's folder." })),
       continue_job: Type.Optional(Type.String({ description: "Id of a recent job in this conversation whose work this request continues. Its worker gets the request as a follow-up and keeps its context." })),
     }),
-    async execute(_id: string, params: { task: string; worker?: string; model?: string; cwd?: string; continue_job?: string }, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) {
+    async execute(
+      _id: string,
+      params: { task: string; context?: string; expected_output?: string; tier?: string; worker?: string; model?: string; mcp?: string[]; web?: boolean; watch?: boolean; include_conversation?: boolean; max_minutes?: number; cwd?: string; continue_job?: string },
+      _signal: unknown,
+      _onUpdate: unknown,
+      ctx: { cwd: string; sessionManager?: { getBranch?: () => unknown[] } },
+    ) {
       const jobs = openStore();
       if (!jobs) throw new Error(`the job list is unavailable (${storeError}); do the work directly or tell the user`);
       if (jobs.active().length >= MAX_RUNNING) throw new Error(`${MAX_RUNNING} jobs are already running; wait for one to finish or cancel one with the jobs tool`);
-      const worker = params.worker ?? "pi";
-      workerCommand(worker, params.task, params.model); // throws on an unknown worker before a job is created
-      // Continuing open work: the same bb child thread gets the follow-up, so the worker keeps its context.
       const previous = params.continue_job ? jobs.get(params.continue_job) : undefined;
       if (params.continue_job && (!previous || previous.origin !== origin)) {
         throw new Error(`no recent job "${params.continue_job}" in this conversation; start a new job without continue_job`);
       }
-      const continuing = previous?.childThreadId ? previous : undefined;
+      const picked = pickWorker({ tier: params.tier, worker: params.worker, model: params.model }, loadTiers(TIERS_PATH), previous);
+      workerCommand(picked.worker, params.task, picked.model); // throws on an unknown worker before a job is created
+      const mode = chooseMode({ inBb: bbContext() !== undefined, watch: params.watch, worker: picked.worker, previous });
+      const resumed = resumable(previous, mode);
+
+      // A follow-up goes to a worker that already has the context; a new worker gets a full brief.
+      let task: string;
+      if (resumed) {
+        task = params.expected_output ? `${params.task}\n\nFinished means: ${params.expected_output}` : params.task;
+      } else {
+        let recent = "";
+        try {
+          // Off by default: a weaker worker can mistake the conversation for its instructions and wander off.
+          if (params.include_conversation) recent = recentConversation(ctx.sessionManager?.getBranch?.() ?? []);
+        } catch {
+          // No conversation excerpt is better than a failed delegate.
+        }
+        task = buildBrief({ goal: params.task, context: params.context, expectedOutput: params.expected_output, recent, alreadyDone: previous?.result ?? undefined });
+      }
+
       const job = jobs.create({
-        task: params.task,
-        worker: continuing?.worker ?? worker,
-        model: continuing?.model ?? params.model,
-        cwd: params.cwd ?? continuing?.cwd ?? ctx.cwd,
+        task,
+        worker: picked.worker,
+        model: picked.model,
+        cwd: params.cwd ?? resumed?.cwd ?? ctx.cwd,
         origin,
-        childThreadId: continuing?.childThreadId ?? null,
+        childThreadId: mode === "thread" ? resumed?.childThreadId ?? null : null,
+        options: {
+          mcp: params.mcp?.length ? params.mcp : resumed?.options.mcp,
+          web: params.web ?? resumed?.options.web,
+          sessionKey: mode === "local" ? resumed?.options.sessionKey ?? newSessionKey() : undefined,
+        },
       });
-      // Inside bb, hand the job to a real bb child thread so the user can see and open it; otherwise a local process.
-      const runningInBb = bbContext() !== undefined;
-      const script = runningInBb ? BB_RUNNER : RUNNER;
+      const script = mode === "thread" ? BB_RUNNER : RUNNER;
       try {
         mkdirSync(DATA_DIR, { recursive: true });
         const log = openSync(join(DATA_DIR, "runner.log"), "a");
         // Detached and unref'd: the runner outlives this session and writes the outcome into the job list itself.
-        const runner = spawn(process.execPath, [script, JOBS_PATH, job.id, String(JOB_TIMEOUT_MS)], {
+        const minutes = Math.min(MAX_JOB_MINUTES, Math.max(1, params.max_minutes ?? DEFAULT_JOB_MINUTES));
+        const runner = spawn(process.execPath, [script, JOBS_PATH, job.id, String(Math.round(minutes * 60_000))], {
           cwd: job.cwd,
           detached: true,
           stdio: ["ignore", log, log],
-          env: { ...process.env, PI_COMPANION: "off" },
+          env: { ...process.env, PI_COMPANION: "off", PI_COMPANION_DATA_DIR: DATA_DIR },
         });
         runner.on("error", (error) => { jobs.finish(job.id, "failed", { error: `could not start the job runner: ${error.message}` }); });
         runner.unref();
@@ -173,8 +237,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         jobs.finish(job.id, "failed", { error: `could not start the job runner: ${error instanceof Error ? error.message : String(error)}` });
         throw error;
       }
+      const working = jobs.activeCount(origin);
+      lastBadge = working;
+      verifyIn = 2;
+      syncBadge();
       return text(
-        `Started job ${job.id} on ${continuing ? `the same worker (${continuing.worker}, continuing job ${continuing.id})` : worker}${runningInBb ? " as a bb child thread; its id will be announced shortly" : ""}. ` +
+        `Started job ${job.id} on ${resumed ? `the same worker (continuing job ${resumed.id})` : `${picked.worker}${picked.model ? `/${picked.model}` : ""}`}` +
+          `${mode === "thread" ? " as a bb child thread you can open" : " (fast, lean start)"}. ${working} agent${working === 1 ? "" : "s"} working now. ` +
           "Its report will arrive in this conversation when it ends.",
       );
     },
@@ -195,7 +264,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       jobs.reconcile(processAlive);
       if (params.action === "list") {
         const all = jobs.list(12);
-        return text(all.length ? all.map(jobLine).join("\n") : "No background jobs yet.");
+        const working = jobs.activeCount(origin);
+        const header = `${working} agent${working === 1 ? "" : "s"} working now.`;
+        return text(all.length ? `${header}\n${all.map(jobLine).join("\n")}` : "No background jobs yet.");
       }
       const job = params.id ? jobs.get(params.id) : undefined;
       if (!job) throw new Error(params.id ? `no single job matches "${params.id}"` : `${params.action} needs a job id`);
@@ -217,7 +288,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         }
         // The stored pid is the runner (local worker or bb-runner); it stops whatever it started.
         if (job.pid !== null && processAlive(job.pid)) killGroup(job.pid);
-        return text(`Cancelled job ${job.id}${job.childThreadId ? ` and stopped @thread:${job.childThreadId}` : ""}.`);
+        const working = jobs.activeCount(origin);
+        lastBadge = working;
+        verifyIn = 2;
+        syncBadge();
+        return text(`Cancelled job ${job.id}${job.childThreadId ? ` and stopped @thread:${job.childThreadId}` : ""}. ${working} agent${working === 1 ? "" : "s"} working now.`);
       }
       throw new Error(`unknown action "${params.action}" (use list, status or cancel)`);
     },
@@ -228,7 +303,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     label: "Remember a preference",
     description:
       "Save one lasting preference or correction from the user so it applies in every future session. One short line, " +
-      "written as a rule. Not for facts about projects or one-off task details (those belong in Cortex).",
+      "written as a rule. Not for facts about projects or one-off task details (those belong in your memory service).",
     promptGuidelines: ["Use remember when the user corrects how you work or states a standing preference; then confirm in one sentence what was saved."],
     parameters: Type.Object({ rule: Type.String({ description: "The preference as one short rule, with the reason if the user gave one" }) }),
     async execute(_id: string, params: { rule: string }) {
@@ -310,6 +385,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       return;
     }
     startPolling();
+    syncBadge(); // clears a stale count left by a session that ended
     if (ctx.hasUI) ctx.ui.notify(`the assistant companion on (${jobs.active().length} jobs running)`, "info");
   });
 

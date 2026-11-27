@@ -39,6 +39,21 @@ Files:
 
 the user wanted to see what each background worker is doing, not just its final report. Inside bb, `delegate` now spawns a real `bb thread spawn` child, parented and lifecycle-owned by the companion thread. It shows up immediately in bb's sidebar with its own task-derived title and provider, can be opened and watched like any other thread, and is stopped with `bb thread stop` on cancel — no polling loop or log-scraping needed, since `bb thread wait --status idle` and `bb thread output --json` give a clean, structured way to block for completion and read the result. Outside bb (plain Pi, or bb's own environment variables missing), delegate is unchanged: a local detached process.
 
+## Speed and quality (0.6.0): what was measured
+
+Trivial task ("reply pong"), same machine, the default model:
+
+| Worker | Time |
+|---|---|
+| Lean (no extensions, no MCP) | 8s |
+| Lean + one MCP server (tool allowlist) | 10s |
+| Full (everything loaded) | 41s |
+| bb child thread | 34s |
+| Claude through bb | 14s |
+| Follow-up to a lean worker | 6s |
+
+Most of a full worker's start-up is loading extensions and MCP servers it does not use (about 7s for six servers). Three things were tried and are recorded so they are not tried again: **per-server agent folders** (slower than the normal folder, because they lose its caches), **stripping server descriptions** (the slowness was not the model obeying them), and **attaching the recent conversation to every brief** (a weaker worker treated it as instructions and wandered: 259s for a 37s job). The conversation is now opt-in.
+
 ## Audit finding, 2026-11-13: a prose rule is not a guarantee
 
 the user reported the companion skipped the probability line. Reproduced in a live bb thread on two separate build/feasibility questions: a reasonable answer came back with no `P = ... PROCEED/FIND ALTERNATIVE` line, even though the exact text of the rule was confirmed present, word-for-word, in that session's system prompt (the model quoted it back on request). The rule was readable and simply not applied.
@@ -65,7 +80,7 @@ the user reported the companion skipped the probability line. Reproduced in a li
 - **At most 4 jobs at once, 45 minutes each.**
 - **`claude` and `codex` workers are untested.** Only the `pi` worker has been run end to end.
 - **Outside bb, reports are keyed by folder.** A one-shot `pi -p` run that exits before its job ends leaves the report for the next session started in the same folder.
-- **Cortex is not wired here.** Recall comes from the separate `pi-cortex-brain` package; the profile only tells the model to use it.
+- **the memory service is not wired here.** Recall comes from the separate `a memory package` package; the profile only tells the model to use it.
 - **Unexplained:** during testing, one prompt that told plain Pi (without this extension) to "use the delegate tool with worker pi" stalled in print mode. It was not reproduced with the extension loaded, and the cause was not found.
 
 ## Roadmap

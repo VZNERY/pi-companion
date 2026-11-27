@@ -12,13 +12,45 @@ export const REPORT_RULE =
   "needs the user's decision. If you could not finish, say exactly what is missing. Never claim something was done " +
   "that you did not do.";
 
-export function workerCommand(worker: string, task: string, model?: string | null): WorkerCommand {
+/** How a Pi worker is started. The default is lean: no extensions and no MCP servers, which starts in about 2 seconds. */
+export interface WorkerOptions {
+  /** Load every extension and MCP server, as an interactive Pi would (about 14 seconds to start). */
+  full?: boolean;
+  /** MCP servers this worker needs. It is allowed the core tools plus these servers' tools, and nothing else. */
+  mcp?: string[];
+  /** Path to the web access extension, loaded only when the task needs the web. */
+  webExtension?: string;
+  /** Keep the worker's conversation on disk under this key, so a follow-up can resume the same worker. */
+  sessionKey?: string;
+  sessionDir?: string;
+}
+
+const CORE_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "codemode"];
+
+/**
+ * The tools a worker may use: the core tools plus the tools of the servers its job needs. A worker that only needs
+ * memory therefore cannot reach the servers that spend credits. (Measured: this also keeps its prompt short.)
+ */
+export const toolAllowlist = (servers: string[]): string => [...CORE_TOOLS, ...[...new Set(servers)].sort().map((name) => `mcp__${name}__*`)].join(",");
+
+export function workerCommand(worker: string, task: string, model?: string | null, opts: WorkerOptions = {}): WorkerCommand {
   const prompt = task + REPORT_RULE;
   // PI_COMPANION=off stops a Pi worker from loading the companion again and delegating in a loop.
-  const env = { PI_COMPANION: "off" };
+  const env: Record<string, string> = { PI_COMPANION: "off" };
   switch (worker) {
-    case "pi":
-      return { command: "pi", args: ["-p", "--no-session", ...(model ? ["--model", model] : []), prompt], env };
+    case "pi": {
+      const lean = !opts.full;
+      const args = [
+        "-p",
+        ...(opts.sessionKey && opts.sessionDir ? ["--session-dir", opts.sessionDir, "--session-id", opts.sessionKey] : ["--no-session"]),
+        ...(lean ? ["-ne"] : []),
+        ...(lean && opts.mcp?.length ? ["-e", "builtin:mcp", "--tools", toolAllowlist(opts.mcp)] : []),
+        ...(lean && opts.webExtension ? ["-e", opts.webExtension] : []),
+        ...(model ? ["--model", model] : []),
+        prompt,
+      ];
+      return { command: "pi", args, env };
+    }
     case "claude":
       return { command: "claude", args: ["-p", ...(model ? ["--model", model] : []), "--permission-mode", "acceptEdits", prompt], env };
     case "codex":

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { bbContext, parseSpawnOutput, parseThreadOutput, parseWaitOutput, spawnArgs } from "./bb.ts";
+import { refreshBadge } from "./badge.ts";
 import { JobStore } from "./store.ts";
 
 /**
@@ -65,5 +66,9 @@ try {
   // close the job (finish is a no-op if the jobs tool already cancelled it), never leave it running forever.
   store.finish(job.id, "failed", { error: error instanceof Error ? error.message : String(error) });
 } finally {
+  await refreshBadge(job.origin, store.activeCount(job.origin)); // the thread title drops this agent from its count
+  // Another job may finish at the same moment and write an older count; a second look after a pause corrects it.
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  await refreshBadge(job.origin, store.activeCount(job.origin));
   store.close();
 }

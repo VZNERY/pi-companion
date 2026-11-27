@@ -134,3 +134,16 @@ test("recent work in one conversation: open jobs and jobs finished within the wi
   assert.equal(store.get(open.id)!.childThreadId, "thr_child");
   assert.ok(!ids.includes(other.id));
 });
+
+test("job options are stored and read back, an old job list gets the column, and the active count is per conversation", () => {
+  const store = newStore();
+  const a = store.create({ task: "a", worker: "pi", cwd: "/tmp", origin: "thr_a", options: { mcp: ["images"], sessionKey: "k1" } });
+  store.create({ task: "b", worker: "pi", cwd: "/tmp", origin: "thr_a" });
+  store.create({ task: "c", worker: "pi", cwd: "/tmp", origin: "thr_b" });
+  assert.deepEqual(store.get(a.id)!.options, { mcp: ["images"], sessionKey: "k1" });
+  assert.deepEqual(store.create({ task: "d", worker: "pi", cwd: "/tmp" }).options, {});
+  assert.equal(store.activeCount("thr_a"), 2);
+  store.finish(a.id, "done", { result: "x" });
+  assert.equal(store.activeCount("thr_a"), 1);
+  assert.equal(store.activeCount("thr_none"), 0);
+});

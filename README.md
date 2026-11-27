@@ -5,7 +5,8 @@ A Pi package that turns a Pi session into a personal companion. Pi itself is not
 What it adds:
 
 - **Profile and skill routing** in the system prompt: how the assistant talks, when to confirm before acting, and which skill to use for which job. The profile is yours (see below); the package ships only a neutral template.
-- **`delegate`**: hands a task to a background worker (`pi`, `claude` or `codex`) that runs in its own context. The conversation stays free, and the worker's short report is posted back when it ends. A job keeps running if the session closes and is reported when the conversation reopens.
+- **`delegate`**: hands a task to a background worker. It starts lean in a few seconds, loads only the MCP servers the job names, and gets a structured brief (goal, context, what finished looks like). A follow-up goes to the same worker, which keeps its context. `tier: "best"` runs Claude through bb for work that needs it; `watch: true` runs the worker as a visible bb child thread. The worker's short report is posted back into the same conversation when it ends, even if the session was closed in between.
+- **A visible count in bb**: while agents work, the thread title reads `[2 agents working] <title>`, and it clears when they finish.
 - **`jobs`**: lists background jobs, shows one job's status and result, or cancels one.
 - **`remember`**: saves a standing preference so it applies in every future session.
 - **`companion`**: the on/off/status switch as a tool. Works in any client that routes tool calls.
@@ -36,6 +37,16 @@ This reads the files you name, saves them to your data folder (outside the packa
 
 Inside a session: `/companion on`, `/companion off`, `/companion status`. Through a chat client that does not forward typed slash commands, use the `companion` tool instead.
 
+## Choosing workers: `workers.json`
+
+`<data dir>/workers.json` maps a tier to a worker and model. The defaults are `fast` = Pi and `best` = Claude (through bb). Example:
+
+```json
+{ "fast": { "worker": "pi", "model": "provider/model-a" }, "best": { "worker": "claude", "model": null } }
+```
+
+Measure your own setup with `npm run bench`; start-up times depend on how many extensions and MCP servers you have. To time a worker that uses one of your MCP servers, set `PI_BENCH_MCP=<server name>`.
+
 ## Where things live
 
 | What | Where |
@@ -56,6 +67,7 @@ When Pi runs inside a bb thread (bb sets `BB_PROJECT_ID`, `BB_ENVIRONMENT_ID` an
 
 ```sh
 npm test       # unit tests, no model calls
+npm run bench  # times each kind of worker and checks that a follow-up resumes the same worker
 npm run e2e    # real Pi session over RPC: delegates a job and waits for the report (uses a few model calls)
 ```
 
