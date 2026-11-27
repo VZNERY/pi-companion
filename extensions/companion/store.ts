@@ -26,7 +26,7 @@ export interface Job {
   childThreadId: string | null;
 }
 
-export interface NewJob { task: string; worker: string; model?: string | null; cwd: string; origin?: string }
+export interface NewJob { task: string; worker: string; model?: string | null; cwd: string; origin?: string; childThreadId?: string | null }
 
 const FINISHED: JobStatus[] = ["done", "failed", "cancelled", "interrupted"];
 export const isFinished = (status: JobStatus): boolean => FINISHED.includes(status);
@@ -92,8 +92,8 @@ export class JobStore {
     if (!task) throw new Error("a job needs a task");
     const id = `j${this.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     this.db
-      .prepare("INSERT INTO jobs (id, task, worker, model, cwd, origin, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)")
-      .run(id, task, input.worker, input.model ?? null, input.cwd, input.origin ?? "", this.now());
+      .prepare("INSERT INTO jobs (id, task, worker, model, cwd, origin, status, created_at, child_thread_id) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)")
+      .run(id, task, input.worker, input.model ?? null, input.cwd, input.origin ?? "", this.now(), input.childThreadId ?? null);
     return this.get(id)!;
   }
 
@@ -116,6 +116,15 @@ export class JobStore {
 
   markRunning(id: string, pid: number): void {
     this.db.prepare("UPDATE jobs SET status = 'running', pid = ?, started_at = ? WHERE id = ?").run(pid, this.now(), id);
+  }
+
+  /** Recent work in one conversation: everything still open, plus jobs finished within the window. Newest first. */
+  recentFor(origin: string, windowMs: number, limit = 3): Job[] {
+    const since = this.now() - windowMs;
+    const rows = this.db
+      .prepare("SELECT * FROM jobs WHERE origin = ? AND (status IN ('queued','running') OR created_at >= ?) ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(origin, since, limit) as Row[];
+    return rows.map(toJob);
   }
 
   /** Records which bb thread is doing this job's work, once it has been spawned. */

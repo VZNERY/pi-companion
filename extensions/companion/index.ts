@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync } from "node:fs";
+import { mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { buildPrompt, isEnabled, learn, readIfExists, setEnabled } from "./promp
 import { killGroup, workerCommand, WORKERS } from "./workers.ts";
 
 /**
- * pi-companion: turns a Pi session into the user's personal companion.
+ * pi-companion: turns a Pi session into a personal companion.
  *   1. Adds his profile, working rules and skill routing to the system prompt (small, size-budgeted).
  *   2. Adds three tools: delegate (hand work to a background worker), jobs (check or cancel), remember (learn a rule).
  *   3. Posts each worker's short report back into the same conversation when it finishes. Workers run as their own
@@ -26,11 +26,6 @@ import { killGroup, workerCommand, WORKERS } from "./workers.ts";
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DATA_DIR = process.env.PI_COMPANION_DATA_DIR ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "pi-companion");
 const STATE_PATH = join(DATA_DIR, "state.json");
-/** Your profile lives in the data folder, never in this package: copy it with scripts/import-profile.mjs. */
-const profilePath = (name: string) => {
-  const local = join(DATA_DIR, "profile", name);
-  return existsSync(local) ? local : join(PACKAGE_ROOT, "profile", name); // falls back to the neutral template
-};
 const LEARNED_PATH = join(DATA_DIR, "learned.md");
 const JOBS_PATH = join(DATA_DIR, "jobs.sqlite");
 const TOOL_NAMES = ["delegate", "jobs", "remember", "companion"];
@@ -41,6 +36,25 @@ const RUNNER = join(dirname(fileURLToPath(import.meta.url)), "runner.ts");
 const BB_RUNNER = join(dirname(fileURLToPath(import.meta.url)), "bb-runner.ts");
 /** Reports go back to the conversation that started the job: the bb thread, or the folder when run outside bb. */
 const originOf = (cwd: string) => process.env.BB_THREAD_ID ?? `cwd:${cwd}`;
+
+const RECENT_WINDOW_MS = 60 * 60_000;
+
+/** What the companion needs to decide whether a new request continues open work: the recent jobs and what they did. */
+function openWorkBlock(jobs: JobStore | undefined, origin: string): string {
+  if (!jobs) return "";
+  const recent = jobs.recentFor(origin, RECENT_WINDOW_MS);
+  if (recent.length === 0) return "";
+  const lines = recent.map((job) => {
+    const outcome = job.status === "done" ? `result: ${short(job.result ?? "", 160)}` : job.status;
+    return `- ${job.id} [${job.status}] ${job.worker}: asked "${short(job.task, 120)}" → ${outcome}`;
+  });
+  return (
+    "Recent background work in this conversation:\n" + lines.join("\n") +
+    "\nIf the user's new message is about the same thing as one of these (for example a change to the same image, file or document), " +
+    "call delegate with continue_job set to that job's id, so the same worker keeps its context. If it is about something else, " +
+    "leave continue_job out to start a new job. If it is genuinely unclear, ask the user one short question first."
+  );
+}
 
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }], details: undefined });
 const age = (from: number | null) => (from === null ? "" : `${Math.max(1, Math.round((Date.now() - from) / 60000))} min`);
@@ -118,14 +132,28 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       worker: Type.Optional(Type.String({ description: `One of: ${WORKERS.join(", ")}. Default pi.` })),
       model: Type.Optional(Type.String({ description: "Model for the worker, for example minimax/MiniMax-M3. Leave out to use the worker's default." })),
       cwd: Type.Optional(Type.String({ description: "Folder the worker runs in. Default: this session's folder." })),
+      continue_job: Type.Optional(Type.String({ description: "Id of a recent job in this conversation whose work this request continues. Its worker gets the request as a follow-up and keeps its context." })),
     }),
-    async execute(_id: string, params: { task: string; worker?: string; model?: string; cwd?: string }, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) {
+    async execute(_id: string, params: { task: string; worker?: string; model?: string; cwd?: string; continue_job?: string }, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) {
       const jobs = openStore();
       if (!jobs) throw new Error(`the job list is unavailable (${storeError}); do the work directly or tell the user`);
       if (jobs.active().length >= MAX_RUNNING) throw new Error(`${MAX_RUNNING} jobs are already running; wait for one to finish or cancel one with the jobs tool`);
       const worker = params.worker ?? "pi";
       workerCommand(worker, params.task, params.model); // throws on an unknown worker before a job is created
-      const job = jobs.create({ task: params.task, worker, model: params.model, cwd: params.cwd ?? ctx.cwd, origin });
+      // Continuing open work: the same bb child thread gets the follow-up, so the worker keeps its context.
+      const previous = params.continue_job ? jobs.get(params.continue_job) : undefined;
+      if (params.continue_job && (!previous || previous.origin !== origin)) {
+        throw new Error(`no recent job "${params.continue_job}" in this conversation; start a new job without continue_job`);
+      }
+      const continuing = previous?.childThreadId ? previous : undefined;
+      const job = jobs.create({
+        task: params.task,
+        worker: continuing?.worker ?? worker,
+        model: continuing?.model ?? params.model,
+        cwd: params.cwd ?? continuing?.cwd ?? ctx.cwd,
+        origin,
+        childThreadId: continuing?.childThreadId ?? null,
+      });
       // Inside bb, hand the job to a real bb child thread so the user can see and open it; otherwise a local process.
       const runningInBb = bbContext() !== undefined;
       const script = runningInBb ? BB_RUNNER : RUNNER;
@@ -146,7 +174,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         throw error;
       }
       return text(
-        `Started job ${job.id} on ${worker}${runningInBb ? " as a bb child thread; its id will be announced shortly" : ""}. ` +
+        `Started job ${job.id} on ${continuing ? `the same worker (${continuing.worker}, continuing job ${continuing.id})` : worker}${runningInBb ? " as a bb child thread; its id will be announced shortly" : ""}. ` +
           "Its report will arrive in this conversation when it ends.",
       );
     },
@@ -226,8 +254,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       }
       if (action === "status") {
         const prompt = buildPrompt({
-          profile: readIfExists(profilePath("PROFILE.md")),
-          routing: readIfExists(profilePath("ROUTING.md")),
+          profile: readIfExists(join(PACKAGE_ROOT, "profile", "PROFILE.md")),
+          routing: readIfExists(join(PACKAGE_ROOT, "profile", "ROUTING.md")),
           learned: readIfExists(LEARNED_PATH),
         });
         const jobs = openStore();
@@ -258,15 +286,16 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   pi.on("before_agent_start", async (event) => {
     if (!isEnabled(STATE_PATH)) return undefined;
     const prompt = buildPrompt({
-      profile: readIfExists(profilePath("PROFILE.md")),
-      routing: readIfExists(profilePath("ROUTING.md")),
+      profile: readIfExists(join(PACKAGE_ROOT, "profile", "PROFILE.md")),
+      routing: readIfExists(join(PACKAGE_ROOT, "profile", "ROUTING.md")),
       learned: readIfExists(LEARNED_PATH),
     });
     // Deterministic backstop: confirmed 2026-11-13 that a model can read the probability rule in the profile and
     // still skip it on a real build question. This never trusts the model to remember; it checks what the user
     // actually typed this turn and, on a match, adds a reminder no model choice can omit.
     const guardrail = event.messageType === "user" && event.prompt ? detectGuardrail(event.prompt) : undefined;
-    const addition = [prompt.text, guardrail?.reminder].filter(Boolean).join("\n\n");
+    const work = openWorkBlock(openStore(), origin);
+    const addition = [prompt.text, work, guardrail?.reminder].filter(Boolean).join("\n\n");
     return addition ? { systemPrompt: `${event.systemPrompt}\n\n${addition}` } : undefined;
   });
 
@@ -277,11 +306,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     if (!enabled) return;
     const jobs = openStore();
     if (!jobs) {
-      if (ctx.hasUI) ctx.ui.notify(`Companion: job list unavailable (${storeError}); profile only`, "warning");
+      if (ctx.hasUI) ctx.ui.notify(`the assistant companion: job list unavailable (${storeError}); profile only`, "warning");
       return;
     }
     startPolling();
-    if (ctx.hasUI) ctx.ui.notify(`Companion on (${jobs.active().length} jobs running)`, "info");
+    if (ctx.hasUI) ctx.ui.notify(`the assistant companion on (${jobs.active().length} jobs running)`, "info");
   });
 
   // Jobs are not stopped here: they run in their own processes and are reported when this conversation reopens.
@@ -290,7 +319,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   });
 
   pi.registerCommand("companion", {
-    description: "Companion: on, off or status",
+    description: "the assistant companion: on, off or status",
     handler: async (args: string, ctx: { ui: { notify: (message: string, level: "info" | "warning" | "error") => void } }) => {
       const action = args.trim().toLowerCase();
       if (action === "on" || action === "off") {
@@ -298,17 +327,17 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         applySwitch(action === "on");
         if (action === "on") startPolling();
         else stopPolling();
-        ctx.ui.notify(`Companion ${action}`, "info");
+        ctx.ui.notify(`the assistant companion ${action}`, "info");
         return;
       }
       const prompt = buildPrompt({
-        profile: readIfExists(profilePath("PROFILE.md")),
-        routing: readIfExists(profilePath("ROUTING.md")),
+        profile: readIfExists(join(PACKAGE_ROOT, "profile", "PROFILE.md")),
+        routing: readIfExists(join(PACKAGE_ROOT, "profile", "ROUTING.md")),
         learned: readIfExists(LEARNED_PATH),
       });
       const jobs = openStore();
       ctx.ui.notify(
-        `Companion ${isEnabled(STATE_PATH) ? "on" : "off"} · prompt ${prompt.text.length} chars${prompt.overBudget ? " (OVER BUDGET)" : ""} · ` +
+        `the assistant companion ${isEnabled(STATE_PATH) ? "on" : "off"} · prompt ${prompt.text.length} chars${prompt.overBudget ? " (OVER BUDGET)" : ""} · ` +
           (jobs ? `${jobs.active().length} jobs running` : `job list unavailable (${storeError})`),
         prompt.overBudget ? "warning" : "info",
       );

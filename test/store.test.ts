@@ -120,3 +120,17 @@ test("an older job list with no child_thread_id column still opens and defaults 
   assert.equal(second.list()[0]!.childThreadId, null);
   second.close();
 });
+
+test("recent work in one conversation: open jobs and jobs finished within the window, newest first", () => {
+  let clock = 1_000_000;
+  const store = new JobStore(":memory:", () => clock);
+  const old = store.create({ task: "old", worker: "pi", cwd: "/tmp", origin: "thr_a" });
+  store.finish(old.id, "done", { result: "x" });
+  clock += 2 * 60 * 60_000; // two hours later: the first job is outside the window
+  const open = store.create({ task: "image of a camel", worker: "pi", cwd: "/tmp", origin: "thr_a", childThreadId: "thr_child" });
+  const other = store.create({ task: "other conversation", worker: "pi", cwd: "/tmp", origin: "thr_b" });
+  const ids = store.recentFor("thr_a", 60 * 60_000).map((j) => j.id);
+  assert.deepEqual(ids, [open.id]);
+  assert.equal(store.get(open.id)!.childThreadId, "thr_child");
+  assert.ok(!ids.includes(other.id));
+});

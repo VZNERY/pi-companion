@@ -36,8 +36,12 @@ if (!ctx) {
 
 try {
   store.markRunning(job.id, process.pid);
-  const spawnOut = execFileSync("bb", spawnArgs(ctx, job.worker, job.task, job.model), { encoding: "utf8", timeout: 30_000 });
-  const spawned = parseSpawnOutput(spawnOut);
+  // A follow-up needs a moment before the thread shows as busy, or the wait below would return at once.
+  if (job.childThreadId) await new Promise((resolve) => setTimeout(resolve, 3000));
+  // A job that names an existing child thread continues it with a follow-up message, keeping everything it already did.
+  const spawned = job.childThreadId
+    ? (execFileSync("bb", ["thread", "tell", job.childThreadId, job.task], { encoding: "utf8", timeout: 30_000 }), { ok: true as const, id: job.childThreadId })
+    : parseSpawnOutput(execFileSync("bb", spawnArgs(ctx, job.worker, job.task, job.model), { encoding: "utf8", timeout: 30_000 }));
   if (!spawned.ok) {
     store.finish(job.id, "failed", { error: `could not spawn a bb child thread: ${spawned.error}` });
   } else {
