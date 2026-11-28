@@ -41,18 +41,20 @@ the user wanted to see what each background worker is doing, not just its final 
 
 ## Speed and quality (0.6.0): what was measured
 
-Trivial task ("reply pong"), same machine, the default model:
+Trivial task ("reply pong"), same machine, the default model. Median of three runs (`npm run bench`); the model API's latency varies a lot between runs, so a single run proves nothing:
 
 | Worker | Time |
 |---|---|
-| Lean (no extensions, no MCP) | 8s |
-| Lean + one MCP server (tool allowlist) | 10s |
-| Full (everything loaded) | 41s |
-| bb child thread | 34s |
+| Lean (no extensions, skills or rule files, no MCP) | 5s |
+| Lean + one MCP server (tool allowlist) | 8s |
+| Full (everything loaded) | 11–15s |
+| bb child thread | 21–38s |
 | Claude through bb | 14s |
-| Follow-up to a lean worker | 6s |
+| Follow-up to a lean worker | 7s |
 
-Most of a full worker's start-up is loading extensions and MCP servers it does not use (about 7s for six servers). Three things were tried and are recorded so they are not tried again: **per-server agent folders** (slower than the normal folder, because they lose its caches), **stripping server descriptions** (the slowness was not the model obeying them), and **attaching the recent conversation to every brief** (a weaker worker treated it as instructions and wandered: 259s for a 37s job). The conversation is now opt-in.
+A full worker's extra time is loading extensions and MCP servers it does not use (about 7s for six servers).
+
+**Prompt size and the KV cache.** A lean worker's prompt was 16,858 tokens, 14,000 of them the skill catalog; skills and rule files are now off (1,599 tokens). The provider's KV cache works across separate worker processes (a second worker read 16,857 of 16,858 tokens from cache), so identical prompt starts are already cheap and fast; it expires when idle. To share larger context between workers, put it first and byte-identical, and the job's own goal last. Three things were tried and are recorded so they are not tried again: **per-server agent folders** (slower than the normal folder, because they lose its caches), **stripping server descriptions** (the slowness was not the model obeying them), and **attaching the recent conversation to every brief** (a weaker worker treated it as instructions and wandered: 259s for a 37s job). The conversation is now opt-in.
 
 ## Audit finding, 2026-11-13: a prose rule is not a guarantee
 
@@ -64,7 +66,7 @@ the user reported the companion skipped the probability line. Reproduced in a li
 
 ## Decisions
 
-- **Extension, not a fork.** An earlier version was a fork and every upstream change had to be merged by hand. Here Pi stays stock; an upgrade is a version bump followed by `npm test` and `npm run e2e`.
+- **Extension, not a fork.** the assistant Core was a fork and every upstream change had to be merged by hand. Here Pi stays stock; an upgrade is a version bump followed by `npm test` and `npm run e2e`.
 - **No runtime dependencies.** SQLite comes from Node, the tool schema library from Pi.
 - **Only the report enters the conversation.** A worker's tool output never does. This is what lets one session carry many jobs.
 - **Workers cannot delegate.** They run with `PI_COMPANION=off`, so a worker never loads the companion and starts a loop.

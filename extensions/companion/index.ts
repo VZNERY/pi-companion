@@ -16,7 +16,7 @@ import { buildPrompt, isEnabled, learn, readIfExists, setEnabled } from "./promp
 import { killGroup, workerCommand, WORKERS } from "./workers.ts";
 
 /**
- * pi-companion: turns a Pi session into a personal companion.
+ * pi-companion: turns a Pi session into the user's personal companion.
  *   1. Adds his profile, working rules and skill routing to the system prompt (small, size-budgeted).
  *   2. Adds three tools: delegate (hand work to a background worker), jobs (check or cancel), remember (learn a rule).
  *   3. Posts each worker's short report back into the same conversation when it finishes. Workers run as their own
@@ -151,6 +151,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       "Use delegate for any work that needs more than a few tool calls or more than about a minute; answer quick questions and do small checks yourself.",
       "Write a real brief: goal in task, what the worker must know in context (paths, ids, decisions already made, approvals already given), and what finished looks like in expected_output.",
       "Set mcp to the MCP server names the job needs, for example [\"memory\"]; leave it out when the job needs none, because every server slows the worker's start.",
+      "Set skills to the names of skills the job needs; workers start without the skill catalog, so a job that needs a skill must name it.",
       "Use tier \"best\" when the work needs careful multi-step reasoning or the user asks for top quality; the default fast tier is for routine work.",
       "Do not set include_conversation unless the task truly depends on what was just said and you cannot put it in context.",
       "Set watch true only when the user wants to open and watch the worker; otherwise jobs start fast, and the thread title shows how many agents are working.",
@@ -165,6 +166,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       worker: Type.Optional(Type.String({ description: `Only to override the tier: one of ${WORKERS.join(", ")}.` })),
       model: Type.Optional(Type.String({ description: "Only to override the tier's model." })),
       mcp: Type.Optional(Type.Array(Type.String(), { description: "MCP server names this job needs. Only these are loaded. Leave out if none." })),
+      skills: Type.Optional(Type.Array(Type.String(), { description: "Names of skills the job needs. A lean worker loads none otherwise. Leave out if none." })),
       web: Type.Optional(Type.Boolean({ description: "True if the job needs web search or page fetching." })),
       watch: Type.Optional(Type.Boolean({ description: "True to run it as a visible bb child thread the user can open. Slower to start." })),
       include_conversation: Type.Optional(Type.Boolean({ description: "True to give the worker the last few messages of this conversation. Rarely needed: put what it must know in context instead." })),
@@ -174,7 +176,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     }),
     async execute(
       _id: string,
-      params: { task: string; context?: string; expected_output?: string; tier?: string; worker?: string; model?: string; mcp?: string[]; web?: boolean; watch?: boolean; include_conversation?: boolean; max_minutes?: number; cwd?: string; continue_job?: string },
+      params: { task: string; context?: string; expected_output?: string; tier?: string; worker?: string; model?: string; mcp?: string[]; skills?: string[]; web?: boolean; watch?: boolean; include_conversation?: boolean; max_minutes?: number; cwd?: string; continue_job?: string },
       _signal: unknown,
       _onUpdate: unknown,
       ctx: { cwd: string; sessionManager?: { getBranch?: () => unknown[] } },
@@ -215,6 +217,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
         childThreadId: mode === "thread" ? resumed?.childThreadId ?? null : null,
         options: {
           mcp: params.mcp?.length ? params.mcp : resumed?.options.mcp,
+          skills: params.skills?.length ? params.skills : resumed?.options.skills,
           web: params.web ?? resumed?.options.web,
           sessionKey: mode === "local" ? resumed?.options.sessionKey ?? newSessionKey() : undefined,
         },

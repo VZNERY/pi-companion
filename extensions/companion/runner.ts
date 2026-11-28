@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { refreshBadge } from "./badge.ts";
 import { assertServers } from "./mcp.ts";
+import { resolveSkills } from "./skills.ts";
 import { JobStore } from "./store.ts";
 import { runWorker, workerCommand, type WorkerOptions } from "./workers.ts";
 
@@ -36,6 +37,7 @@ try {
     assertServers(job.options.mcp, agentDir); // an unknown server fails the job at once, with the configured names
     opts.mcp = job.options.mcp;
   }
+  if (job.options.skills?.length) opts.skills = resolveSkills(job.options.skills, process.env.PI_COMPANION_SKILLS_DIR ?? join(homedir(), ".agents", "skills")); // an unknown skill fails the job at once
   const web = join(agentDir, "npm", "node_modules", "pi-web-access");
   if (job.options.web && existsSync(web)) opts.webExtension = web;
   if (job.options.sessionKey) Object.assign(opts, { sessionKey: job.options.sessionKey, sessionDir: join(dataDir, "sessions") });

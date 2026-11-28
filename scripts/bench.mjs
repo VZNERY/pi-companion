@@ -30,25 +30,44 @@ async function run(label, task, options, script = "runner.ts", childThreadId = n
     child.on("exit", resolve);
   });
   const done = store.get(job.id);
-  const seconds = ((Date.now() - started) / 1000).toFixed(1);
-  console.log(`${label.padEnd(30)} ${seconds.padStart(6)}s  ${done.status.padEnd(7)} ${(done.result ?? done.error ?? "").replace(/\s+/g, " ").slice(0, 60)}`);
+  done.seconds = (Date.now() - started) / 1000;
+  return done;
+}
+
+// One run is not a measurement: model latency varies a lot from run to run (a single run of the same worker has
+// taken 14s and 41s). Each row runs several times; the median is the number to trust.
+const RUNS = Math.max(1, Number(process.env.PI_BENCH_RUNS ?? 3));
+const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+async function row(label, task, options, script = "runner.ts", runs = RUNS) {
+  const resumeRow = label === "first message" || label.startsWith("follow-up");
+  if (only === "resume" ? !resumeRow : only && !label.includes(only)) return;
+  const results = [];
+  for (let i = 0; i < runs; i += 1) results.push(await run(label, task, options, script));
+  const failed = results.filter((r) => r.status !== "done").length;
+  console.log(`${label.padEnd(34)} median ${median(results.map((r) => r.seconds)).toFixed(1).padStart(5)}s  runs ${results.map((r) => r.seconds.toFixed(1)).join(", ")}${failed ? `  (${failed} FAILED)` : ""}`);
+}
+
+async function runOnce(label, task, options) {
+  if (only && only !== "resume" && !label.includes(only)) return { status: "skipped" };
+  const done = await run(label, task, options);
+  console.log(`${label.padEnd(34)} ${done.seconds.toFixed(1).padStart(11)}s  ${done.status} ${(done.result ?? done.error ?? "").replace(/\s+/g, " ").slice(0, 50)}`);
   return done;
 }
 
 const TASK = "Reply with the single word: pong";
-console.log("worker".padEnd(30), "time".padStart(7), " status  answer");
-await run("lean (no extensions, no MCP)", TASK, {});
+console.log(`Each row: ${RUNS} runs, median shown (set PI_BENCH_RUNS to change)`);
+await row("lean (default)", TASK, {});
 const mcpServer = process.env.PI_BENCH_MCP; // name of one MCP server from your mcp.json, to time a lean worker that uses it
-if (mcpServer) await run(`lean + MCP server (${mcpServer})`, TASK, { mcp: [mcpServer] });
-await run("full (everything loaded)", TASK, { full: true });
-if (inBb) await run("bb thread (watchable)", TASK, {}, "bb-runner.ts");
+if (mcpServer) await row(`lean + MCP server (${mcpServer})`, TASK, { mcp: [mcpServer] });
+await row("full (everything loaded)", TASK, { full: true });
+if (inBb) await row("bb thread (watchable)", TASK, {}, "bb-runner.ts", Math.min(RUNS, 2));
 else console.log("bb thread (watchable)".padEnd(30), "skipped: not running inside bb");
 
 if (only && only !== "resume") { store.close(); process.exit(0); }
 console.log("\nresume test: a follow-up to the same lean worker");
 const key = newSessionKey();
-await run("first message", "Remember this number: 7421. Reply with just: ok", { sessionKey: key });
-const second = await run("follow-up, same session", "What number did I ask you to remember? Reply with just the number.", { sessionKey: key });
+await runOnce("first message", "Remember this number: 7421. Reply with just: ok", { sessionKey: key });
+const second = await runOnce("follow-up, same session", "What number did I ask you to remember? Reply with just the number.", { sessionKey: key });
 const resumed = (second.result ?? "").includes("7421");
 console.log(resumed ? "RESUME PASSED: the worker remembered the number" : "RESUME FAILED: the worker did not remember");
 store.close();

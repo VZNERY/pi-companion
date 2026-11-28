@@ -1,14 +1,19 @@
 # Changelog
 
-## 0.6.1
+## 0.7.0
 
-- Child threads and on-screen notices are named "Companion", not a leftover placeholder. No other changes.
+- **Workers start without the skill catalog and rule files.** Measured: a lean worker's prompt was 16,858 tokens, about 14,000 of them the descriptions of 84 installed skills. With skills and rule files off it is 1,599 tokens (90% less). Time barely changes, because the provider's cache already served the shared start of the prompt, but a cold start no longer pays for 16,700 fresh tokens, and a worker no longer reads 84 skill descriptions that invite it to wander. A job that needs a skill names it (`skills: [...]`); an unknown name fails the job at once. In place of the rule files, every worker is told a short safety rule: no sending, posting, pushing, deploying or spending unless the task says so, and never print a secret.
+- **KV cache findings (nothing to build).** The provider's prompt cache works across separate worker processes: a second lean worker read 16,857 of 16,858 prompt tokens from cache. It goes cold after an idle gap (one run was 2% cached). Keep the start of every worker prompt identical and put what changes last.
+- **Handing a worker its context beats having it fetch it.** The same question took 5–7s with the fact in the brief and 61–108s when the worker fetched it from the memory service.
+- **The benchmark repeats.** `npm run bench` runs each row three times and shows the median, because one run of the same worker has taken 11s and 41s.
+- **Corrected numbers.** Median of three, trivial task: lean 5.3s, lean with one MCP server 8.1s, fully loaded 11.3s (11–15s across sessions), bb thread 21–38s. Lean saves about 6–9s per job. The 0.6.0 notes quoted 8s against 41s from single runs.
+- 70 unit tests, the end-to-end test and the benchmark pass on Pi 1.7.0.
 
 ## 0.6.0
 
 Speed, briefs, quality tiers, and a visible count of working agents. Every number below was measured here with `npm run bench`.
 
-- **Lean workers (speed).** A worker now starts with no extensions and no MCP servers unless the job needs them. A trivial task took 8s lean, against 41s with everything loaded and 34s as a bb thread. When a job needs MCP, only those servers' tools are allowed (`--tools` allowlist), so a memory job cannot reach a video service or an image service: 10s with the memory service. Runs as a local process by default; `watch: true` gives a visible bb child thread instead.
+- **Lean workers (speed).** A worker now starts with no extensions and no MCP servers unless the job needs them. A trivial task took about 5s lean, against about 11–15s with everything loaded and 21–38s as a bb thread (corrected in 0.7.0: the first figures, 8s and 41s, came from single runs). When a job needs MCP, only those servers' tools are allowed (`--tools` allowlist), so a memory job cannot reach a video service or an image service: about 8s with the memory service. Runs as a local process by default; `watch: true` gives a visible bb child thread instead.
 - **Follow-ups resume the same worker, lean too.** A lean worker keeps its session, so a follow-up reaches a worker that remembers its work (6s; tested with a remembered number).
 - **Briefs.** `delegate` takes `task` (goal), `context`, and `expected_output`, and builds a structured brief with a size cap. The raw conversation is opt-in (`include_conversation`): in testing it made a weaker worker go investigating, and one job took 259s instead of 37s.
 - **Quality tiers.** `tier: "best"` runs Claude through bb (14s on the trivial task); `fast` runs Pi. The mapping is the user's own `workers.json`. Claude and Codex always run through bb, because the plain CLIs are not signed in on a server.

@@ -8,6 +8,9 @@ export type WorkerName = (typeof WORKERS)[number];
 
 /** Workers are told to end with a short report, because only that report enters the companion's conversation. */
 export const REPORT_RULE =
+  "\n\nRules: do only what this task asks. Do not send emails or messages, publish or post anything, push code, deploy, " +
+  "or spend money or credits unless the task explicitly says to. Never print or copy a secret (a key, token or password). " +
+  "If something is unclear, say so in your report instead of guessing." +
   "\n\nWhen you finish, end with a short report (under 150 words): what you did, what you found, and anything that " +
   "needs the user's decision. If you could not finish, say exactly what is missing. Never claim something was done " +
   "that you did not do.";
@@ -18,6 +21,8 @@ export interface WorkerOptions {
   full?: boolean;
   /** MCP servers this worker needs. It is allowed the core tools plus these servers' tools, and nothing else. */
   mcp?: string[];
+  /** Skill folders to load for this job. A lean worker loads no skills otherwise. */
+  skills?: string[];
   /** Path to the web access extension, loaded only when the task needs the web. */
   webExtension?: string;
   /** Keep the worker's conversation on disk under this key, so a follow-up can resume the same worker. */
@@ -43,7 +48,9 @@ export function workerCommand(worker: string, task: string, model?: string | nul
       const args = [
         "-p",
         ...(opts.sessionKey && opts.sessionDir ? ["--session-dir", opts.sessionDir, "--session-id", opts.sessionKey] : ["--no-session"]),
-        ...(lean ? ["-ne"] : []),
+        // Lean: no extensions, no skill catalog, no rule files (measured: 16,858 prompt tokens down to 1,599).
+        ...(lean ? ["-ne", "-ns", "-nc"] : []),
+        ...(lean ? (opts.skills ?? []).flatMap((dir) => ["--skill", dir]) : []),
         ...(lean && opts.mcp?.length ? ["-e", "builtin:mcp", "--tools", toolAllowlist(opts.mcp)] : []),
         ...(lean && opts.webExtension ? ["-e", opts.webExtension] : []),
         ...(model ? ["--model", model] : []),

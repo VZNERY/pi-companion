@@ -28,7 +28,7 @@ export interface Job {
   options: JobOptions;
 }
 
-export interface JobOptions { mcp?: string[]; web?: boolean; full?: boolean; sessionKey?: string }
+export interface JobOptions { mcp?: string[]; skills?: string[]; web?: boolean; full?: boolean; sessionKey?: string }
 
 export interface NewJob { task: string; worker: string; model?: string | null; cwd: string; origin?: string; childThreadId?: string | null; options?: JobOptions }
 

@@ -14,7 +14,7 @@ const work = mkdtempSync(join(tmpdir(), "pi-companion-e2e-"));
 const target = join(work, "hello.txt");
 const DEADLINE_MS = 240_000;
 
-const pi = spawn("pi", ["--mode", "rpc", "--no-session", "-ne", "-e", join(root, "extensions", "companion", "index.ts"), ...(model ? ["--model", model] : [])], {
+const pi = spawn("pi", ["--mode", "rpc", "--no-session", "-ne", "-e", join(root, "extensions", "companion", "index.ts"), "--model", model], {
   cwd: work,
   // A private data folder, so the test never touches the real job list or learned rules.
   env: { ...process.env, PI_COMPANION: "on", PI_COMPANION_DATA_DIR: join(work, "data") },
@@ -78,6 +78,6 @@ pi.stdin.write(
   JSON.stringify({
     id: "p1",
     type: "prompt",
-    message: `I say go. Call delegate with worker pi${model ? `, model ${model}` : ""}, and this task: "Create the file ${target} containing exactly the word: hi". Then tell me in one sentence that it started.`,
+    message: `I say go. Call delegate with worker pi, model ${model}, and this task: "Create the file ${target} containing exactly the word: hi". Then tell me in one sentence that it started.`,
   }) + "\n",
 );

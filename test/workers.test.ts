@@ -7,7 +7,7 @@ const sh = (script: string) => ({ command: "sh", args: ["-c", script], env: {} }
 test("each worker gets its own command, and Pi workers have the companion switched off", () => {
   const pi = workerCommand("pi", "do it", "provider/model-a");
   assert.equal(pi.command, "pi");
-  assert.deepEqual(pi.args.slice(0, 5), ["-p", "--no-session", "-ne", "--model", "provider/model-a"]);
+  assert.deepEqual(pi.args.slice(0, 7), ["-p", "--no-session", "-ne", "-ns", "-nc", "--model", "provider/model-a"]);
   assert.equal(pi.env.PI_COMPANION, "off");
   assert.match(pi.args.at(-1)!, /^do it[\s\S]*short report/);
   assert.equal(workerCommand("claude", "x").command, "claude");
@@ -67,11 +67,18 @@ test("long output keeps only its end", () => {
 
 test("a lean Pi worker loads no extensions and no MCP unless asked, and a full worker loads everything", () => {
   const lean = workerCommand("pi", "x");
-  assert.ok(lean.args.includes("-ne"));
+  assert.ok(lean.args.includes("-ne") && lean.args.includes("-ns") && lean.args.includes("-nc"));
   assert.ok(!lean.args.includes("builtin:mcp"));
   assert.equal(lean.env.PI_CODING_AGENT_DIR, undefined);
   const full = workerCommand("pi", "x", null, { full: true });
-  assert.ok(!full.args.includes("-ne"));
+  assert.ok(!full.args.includes("-ne") && !full.args.includes("-ns") && !full.args.includes("-nc"));
+});
+
+test("a lean worker loads only the skills a job names, and every worker is told the safety rules", () => {
+  const cmd = workerCommand("pi", "x", null, { skills: ["/s/research", "/s/council"] });
+  assert.deepEqual(cmd.args.filter((a, i) => cmd.args[i - 1] === "--skill"), ["/s/research", "/s/council"]);
+  assert.ok(!workerCommand("pi", "x").args.includes("--skill"));
+  for (const worker of ["pi", "claude", "codex"]) assert.match(workerCommand(worker, "x").args.at(-1)!, /Do not send emails or messages, publish or post anything, push code, deploy/);
 });
 
 test("a worker that needs MCP servers gets the MCP extension and may use only those servers' tools", () => {
